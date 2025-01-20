@@ -5,9 +5,9 @@ import (
 	"sync"
 )
 
-func NewLimitBuffer(cap int) *LimitBuffer {
+func NewLimitBuffer(size int) *LimitBuffer {
 	return &LimitBuffer{
-		buf:  make([]byte, cap),
+		buf:  make([]byte, size),
 		cond: sync.NewCond(&sync.Mutex{}),
 	}
 }

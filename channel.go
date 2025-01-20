@@ -14,3 +14,8 @@ func (c *Channel) Write(b []byte) (n int, err error) {
 	h := NewHeader(PAYLOAD, c.id, uint32(len(b)))
 	return c.wb.Write(append(h[:], b...))
 }
+
+func (c *Channel) Close() error {
+	// TODO
+	return nil
+}

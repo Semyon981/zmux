@@ -15,18 +15,18 @@ func serve(l net.Listener) {
 }
 
 func handleConn(conn net.Conn) {
-	mux := zmux.NewMux(conn)
+	mux := zmux.New(conn)
 	for {
 		ch, err := mux.Accept()
 		if err != nil {
 			log.Printf("failed to accept channel: %s\n", err)
 			continue
 		}
-		go handleChannel(*ch)
+		go handleChannel(ch)
 	}
 }
 
-func handleChannel(ch mux.Channel) {
+func handleChannel(ch *zmux.Channel) {
 	for {
 		b := make([]byte, 100)
 		n, err := ch.Read(b)
@@ -51,7 +51,7 @@ func main() {
 		return
 	}
 
-	mux := zmux.NewMux(conn)
+	mux := zmux.New(conn)
 
 	ch, err := mux.Open()
 	if err != nil {

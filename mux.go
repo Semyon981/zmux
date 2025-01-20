@@ -4,22 +4,34 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
+	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type Mux interface {
 	Accept() (*Channel, error)
+	AcceptWithSize(bufferSize int) (*Channel, error)
 	Open() (*Channel, error)
+	OpenWithSize(bufferSize int) (*Channel, error)
 }
 
-func NewMux(conn net.Conn) Mux {
+func New(conn io.ReadWriteCloser) Mux {
+	return NewWithConfig(conn, DefaultConfig)
+}
+
+func NewWithConfig(conn io.ReadWriteCloser, cfg Config) Mux {
+	cfg.normalize()
 	m := &mux{
-		base:       conn,
-		channels:   make(map[uint16]*Channel),
-		sb:         NewLimitBuffer(1024 * 16),
-		notifyOpen: make(chan *Channel),
+		base:           conn,
+		channels:       make(map[uint16]*Channel),
+		sb:             NewLimitBuffer(cfg.SendBufferSize),
+		notifyOpen:     make(chan struct{}),
+		notifyAccepted: make(chan struct{}),
+		accepted:       make(chan uint16),
+		cfg:            cfg,
+		nextId:         math.MaxUint16,
 	}
 	go m.recv()
 	go m.send()
@@ -27,13 +39,18 @@ func NewMux(conn net.Conn) Mux {
 }
 
 type mux struct {
-	base       net.Conn
-	channels   map[uint16]*Channel
-	mu         sync.RWMutex
-	sb         *LimitBuffer
-	notifyOpen chan *Channel
+	base     io.ReadWriteCloser
+	channels map[uint16]*Channel
+	mu       sync.RWMutex
+	sb       *LimitBuffer
+
+	notifyOpen     chan struct{}
+	notifyAccepted chan struct{}
 
 	nextId uint32
+	cfg    Config
+
+	accepted chan uint16
 }
 
 func (m *mux) recv() {
@@ -47,17 +64,10 @@ func (m *mux) recv() {
 
 		switch h.FrameType() {
 		case OPEN:
-			c := &Channel{
-				rb: NewLimitBuffer(1024),
-				wb: m.sb,
-				id: h.ConnID(),
-			}
-
-			m.mu.Lock()
-			m.channels[h.ConnID()] = c
-			m.mu.Unlock()
-
-			m.notifyOpen <- c
+			m.notifyOpen <- struct{}{}
+			<-m.notifyAccepted
+		case ACCEPTED:
+			m.accepted <- h.ConnID()
 		case PAYLOAD:
 			m.mu.RLock()
 			c, ok := m.channels[h.ConnID()]
@@ -90,16 +100,25 @@ func (m *mux) send() {
 	}
 }
 
+// Принимает канал. Вызывать только на сервере
 func (m *mux) Accept() (*Channel, error) {
-	return <-m.notifyOpen, nil
+	return m.AcceptWithSize(m.cfg.RecvBuffersSize)
 }
 
-func (m *mux) Open() (*Channel, error) {
+func (m *mux) AcceptWithSize(bufferSize int) (*Channel, error) {
+	<-m.notifyOpen
+
 	cid := uint16(atomic.AddUint32(&m.nextId, 1))
-	h := NewHeader(OPEN, cid, 0)
+	h := NewHeader(ACCEPTED, cid, 0)
+
+	_, err := m.sb.Write(h[:])
+	if err != nil {
+		m.notifyAccepted <- struct{}{}
+		return nil, fmt.Errorf("failed to write frame in buffer: %w", err)
+	}
 
 	c := &Channel{
-		rb: NewLimitBuffer(1024),
+		rb: NewLimitBuffer(bufferSize),
 		wb: m.sb,
 		id: cid,
 	}
@@ -108,9 +127,34 @@ func (m *mux) Open() (*Channel, error) {
 	m.channels[cid] = c
 	m.mu.Unlock()
 
+	m.notifyAccepted <- struct{}{}
+	return c, nil
+}
+
+// Открывает канал. Вызывать только на клиенте
+func (m *mux) Open() (*Channel, error) {
+	return m.OpenWithSize(m.cfg.RecvBuffersSize)
+}
+
+func (m *mux) OpenWithSize(bufferSize int) (*Channel, error) {
+	h := NewHeader(OPEN, 0, 0)
+	time.Sleep(time.Second)
 	_, err := m.sb.Write(h[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to write frame in buffer: %w", err)
 	}
+
+	cid := <-m.accepted
+
+	c := &Channel{
+		rb: NewLimitBuffer(bufferSize),
+		wb: m.sb,
+		id: cid,
+	}
+
+	m.mu.Lock()
+	m.channels[cid] = c
+	m.mu.Unlock()
+
 	return c, nil
 }

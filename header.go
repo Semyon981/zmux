@@ -7,6 +7,7 @@ type FrameType uint8
 const (
 	PAYLOAD FrameType = iota
 	OPEN
+	ACCEPTED
 )
 
 type Header [7]byte
