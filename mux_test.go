@@ -7,7 +7,7 @@ import (
 
 func TestSample(t *testing.T) {
 	for i := 0; i < 10; i++ {
-		if x := fmt.Sprintf("%d", 42); x != "42" {
+		if x := fmt.Sprintf("%d", 45); x != "45" {
 			t.Fatalf("Unexpected string: %s", x)
 		}
 	}
